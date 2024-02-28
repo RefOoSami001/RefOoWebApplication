@@ -5,6 +5,8 @@ html, body {
     color: #333;
     height: 100vh; 
     overflow: hidden;
+    margin: 0;
+    padding: 0;
 }
 
 .title {
@@ -15,15 +17,18 @@ html, body {
 }
 
 form {
-    margin: 0 auto;
     max-width: 400px;
+    min-width: 350px;
     padding: 20px;
     background-color: rgb(255, 255, 255); /* Adjust opacity for a subtle frosted effect */
     border-radius: 10px;
     box-shadow: 0 15px 25px rgba(129, 124, 124, 0.2); /* Added shadow */
     transition: box-shadow 0.3s; /* Added transition for shadow */
-    position: relative; /* Ensure proper positioning */
+    position: absolute; /* Ensure proper positioning */
     z-index: 2; /* Set z-index higher than the circle */
+    top: 50%; /* Move to 50% from top */
+    left: 50%; /* Move to 50% from left */
+    transform: translate(-50%, -50%); /* Translate back by half of its width and height */
 }
 
 
